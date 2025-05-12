@@ -9,9 +9,12 @@ import { ReverseSortedSet } from "./helpers/reverseSortedSet.js";
 interface QueueRunner {
 	prio: number; // Higher values have higher priority
 	queueRun(): void;
+
+	// ReverseSortedSet might add some symbols here
+	[idx: symbol]: QueueRunner;
 }
 
-let sortedQueue: ReverseSortedSet<QueueRunner> | undefined; // When set, a runQueue is scheduled or currently running.
+let sortedQueue: ReverseSortedSet<QueueRunner, 'prio'> | undefined; // When set, a runQueue is scheduled or currently running.
 let runQueueDepth = 0 // Incremented when a queue event causes another queue event to be added. Reset when queue is empty. Throw when >= 42 to break (infinite) recursion.
 let topRedrawScope: Scope | undefined // The scope that triggered the current redraw. Elements drawn at this scope level may trigger 'create' animations.
 
@@ -22,7 +25,7 @@ export type DatumType = TargetType | boolean | number | string | null | undefine
 
 function queue(runner: QueueRunner) {
 	if (!sortedQueue) {
-		sortedQueue = new ReverseSortedSet<QueueRunner>('prio');
+		sortedQueue = new ReverseSortedSet<QueueRunner, 'prio'>('prio');
 		setTimeout(runQueue, 0);
 	} else if (!(runQueueDepth&1)) {
 		runQueueDepth++; // Make it uneven
@@ -158,6 +161,9 @@ abstract class Scope implements QueueRunner {
 	// handled before their children (as they should), and observes are executed in the
 	// order of the source code.
 	prio: number = --lastPrio;
+
+	// ReverseSortedSet might add some symbols here
+	[idx: symbol]: Scope;
 
 	abstract onChange(index: any, newData: DatumType, oldData: DatumType): void;
 	abstract queueRun(): void;
@@ -431,7 +437,7 @@ class SetArgScope extends ChainedScope {
 }
 
 
-let immediateQueue: ReverseSortedSet<Scope> = new ReverseSortedSet('prio');
+let immediateQueue: ReverseSortedSet<Scope, 'prio'> = new ReverseSortedSet('prio');
 
 class ImmediateScope extends RegularScope {
 	onChange(index: any, newData: DatumType, oldData: DatumType) {
@@ -470,17 +476,17 @@ class OnEachScope extends Scope {
 
 	/** The data structure we are iterating */
 	target: TargetType;
-	
+
 	/** All item scopes, by array index or object key. This is used for removing an item scope when its value
 	 * disappears, and calling all subscope cleaners. */
 	byIndex: Map<any,OnEachItemScope> = new Map();
 
 	/** The reverse-ordered list of item scopes, not including those for which makeSortKey returned undefined. */
-	sortedSet: ReverseSortedSet<OnEachItemScope> = new ReverseSortedSet('sortKey');
+	sortedSet: ReverseSortedSet<OnEachItemScope, 'sortKey'> = new ReverseSortedSet('sortKey');
 
 	/** Indexes that have been created/removed and need to be handled in the next `queueRun`. */
 	changedIndexes: Set<any> = new Set();
-	
+
 	constructor(
 		proxy: TargetType,
 		/** A function that renders an item */
@@ -564,7 +570,9 @@ class OnEachScope extends Scope {
 class OnEachItemScope extends ContentScope {
 	sortKey: string | number | undefined; // When undefined, this scope is currently not showing in the list
 	public parentElement: Element;
-	
+
+	[idx: symbol]: OnEachItemScope;
+
 	constructor(
 		public parent: OnEachScope,
 		public itemIndex: any,
