@@ -1,5 +1,5 @@
-// ReverseSortedSet saves the skip links for all required levels on the object itself
-type SkipItem<T> = {[idx: symbol]: T}
+// tailOrHead marker
+const tailOrHead = Symbol('tailOrHead');
 
 /**
  * A set-like collection of objects that can do iteration sorted by a specified index property.
@@ -9,11 +9,9 @@ type SkipItem<T> = {[idx: symbol]: T}
  * It's implemented as a skiplist, maintaining all meta-data as part of the objects that it
  * is tracking, for performance.
  */
-export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
-    // A fake item, that is not actually T, but *does* contain symbols pointing at the first item for each level.
-    private tail: SkipItem<T>;
-    // As every SkipList instance has its own symbols, an object can be included in more than one SkipList.
-    private symbols: symbol[]
+export class ReverseSortedSet<T extends object, KeyPropT extends keyof T> {
+    // Per-level skiplists mapping item to previous item
+    private lists: Map<T|typeof tailOrHead,T|typeof tailOrHead>[];
 
     /**
      * Create an empty SortedSet.
@@ -23,8 +21,9 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
      * has a useful toString-conversion).
      */
     constructor(private keyProp: KeyPropT) {
-        this.tail = {} as SkipItem<T>
-        this.symbols = [Symbol(0)]
+        this.lists = [
+            new Map([[tailOrHead, tailOrHead]]) // initialize level 0 already
+        ];
     }
 
     /**
@@ -45,24 +44,30 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
      * Time complexity: O(log n)
      */
     add(item: T): boolean {
-        if (this.symbols[0] in item) return false // Already included
+        if (this.lists[0].has(item)) return false; // Already included
 
         // Start at level 1. Keep upping the level by 1 with 1/8 chance.
         const level = 1 + (Math.clz32(Math.random() * 0xFFFFFFFF) >> 2)
-        for(let l = this.symbols.length; l < level; l++) this.symbols.push(Symbol(l))
+        for(let l = this.lists.length; l < level; l++) this.lists.push(new Map([[tailOrHead, tailOrHead]]))
 
         const keyProp = this.keyProp
         const key = item[keyProp]
     
         // prev is always a complete T, current might be tail only contain pointers
-        let prev: T | undefined;
-        let current: SkipItem<T> = this.tail;
-        for (let l = this.symbols.length-1; l>=0; l--) {
-            const symbol = this.symbols[l]
-            while ((prev = current[symbol]) && prev[keyProp] > key) current = prev;
+        let current: T | typeof tailOrHead = tailOrHead;
+        for (let l = this.lists.length-1; l>=0; l--) {
+            const list = this.lists[l]
+            let prev = list.get(current);
+            while (prev !== undefined && prev !== tailOrHead && prev[keyProp] > key) {
+                current = prev;
+                prev = list.get(current);
+            }
+            if (prev === undefined) {
+                throw new Error('should not happen');
+            }
             if (l < level) {
-                (item as SkipItem<T>)[symbol] = current[symbol];
-                current[symbol] = item;
+                list.set(current, item);
+                list.set(item, prev)
             }
         }
 
@@ -74,7 +79,7 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
      * @returns true if this object item is already part of the set.
      */
     has(item: T): boolean {
-        return this.symbols[0] in item;
+        return this.lists[0].has(item);
     }
 
     /**
@@ -82,8 +87,8 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
      * @returns what was previously the last item in the sorted set, or `undefined` if the set was empty.
      */
     fetchLast(): T | undefined {
-        let item = this.tail[this.symbols[0]];
-        if (item) {
+        let item = this.lists[0].get(tailOrHead)
+        if (item && item !== tailOrHead) {
             this.remove(item);
             return item;
         }
@@ -93,7 +98,7 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
      * @returns whether the set is empty (`true`) or has at least one item (`false`).
      */
     isEmpty(): boolean {
-        return this.tail[this.symbols[0]] === undefined;
+        return this.lists[0].get(tailOrHead) === undefined;
     }
 
     /**
@@ -110,24 +115,25 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
         const keyProp = this.keyProp
 
         // prev is always a complete T, current might be tail only contain pointers
-        let prev: T | undefined;
-        let current: SkipItem<T> = this.tail;
-        for (let l = this.symbols.length-1; l>=0; l--) {
-            const symbol = this.symbols[l]
-            while ((prev = current[symbol]) && prev[keyProp] > indexValue) current = prev;
+        let prev: T | typeof tailOrHead | undefined;
+        let current: T | typeof tailOrHead = tailOrHead;
+        for (let l = this.lists.length-1; l>=0; l--) {
+            const list = this.lists[l]
+            while ((prev = list.get(current)) && prev !== tailOrHead && prev[keyProp] > indexValue) current = prev;
         }
-        return current[this.symbols[0]]?.[keyProp] === indexValue ? current[this.symbols[0]] : undefined;
+        const item = this.lists[0].get(current);
+        return (item && item !== tailOrHead && item[keyProp] === indexValue) ? item : undefined;
     }
 
     /**
      * The iterator will go through the items in reverse index-order.
      */
     *[Symbol.iterator](): IterableIterator<T> {
-        let symbol = this.symbols[0]
-        let node = this.tail[symbol];
-        while (node) {
+        const list0 = this.lists[0];
+        let node = list0.get(tailOrHead);
+        while (node && node !== tailOrHead) {
             yield node;
-            node = node[symbol];
+            node = list0.get(node);
         }
     }
 
@@ -139,7 +145,8 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
      * Time complexity: O(1)
      */
     prev(item: T): T | undefined {
-        return item[this.symbols[0]]
+        const prev = this.lists[0].get(item);
+        return prev !== tailOrHead ? prev : undefined;
     }
 
     /**
@@ -151,19 +158,20 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
      * Time complexity: O(log n)
      */
     remove(item: T): boolean {
-        if (!(this.symbols[0] in item)) return false;
+        if (!this.lists[0].has(item)) return false;
         const keyProp = this.keyProp
         const prop = item[keyProp];
         
         // prev is always a complete T, current might be tail only contain pointers
-        let prev: T | undefined;
-        let current: SkipItem<T> = this.tail;
-        for (let l = this.symbols.length - 1; l >= 0; l--) {
-            const symbol = this.symbols[l];
-            while ((prev = current[symbol]) && prev[keyProp] >= prop && prev !== item) current = prev
+        let prev: T | typeof tailOrHead | undefined;
+        let current: T | typeof tailOrHead = tailOrHead;
+        for (let l = this.lists.length - 1; l >= 0; l--) {
+            const list = this.lists[l];
+            while ((prev = list.get(current)) && prev !== tailOrHead && prev[keyProp] >= prop && prev !== item) current = prev
             if (prev === item) {
-                (current as any)[symbol] = prev[symbol]
-                delete prev[symbol]
+                const prevPrev = list.get(prev);
+                list.set(current, prevPrev ?? tailOrHead);
+                list.delete(prev);
             }
         }
 
@@ -173,20 +181,10 @@ export class ReverseSortedSet<T extends SkipItem<T>, KeyPropT extends keyof T> {
     /**
      * Remove all items for the set.
      *
-     * Time complexity: O(n)
+     * Time complexity: 1
      */    
     clear(): void {
-        const symbol = this.symbols[0];
-        let current = this.tail;
-        while (current) {
-            const prev = current[symbol];
-            for (const symbol of this.symbols) {
-                if (!(symbol in current)) break
-                delete current[symbol];
-            }
-            current = prev
-        }
-        this.tail = {}
+        this.lists = [new Map()];
     }
 }
 

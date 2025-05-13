@@ -9,9 +9,6 @@ import { ReverseSortedSet } from "./helpers/reverseSortedSet.js";
 interface QueueRunner {
 	prio: number; // Higher values have higher priority
 	queueRun(): void;
-
-	// ReverseSortedSet might add some symbols here
-	[idx: symbol]: QueueRunner;
 }
 
 let sortedQueue: ReverseSortedSet<QueueRunner, 'prio'> | undefined; // When set, a runQueue is scheduled or currently running.
@@ -161,9 +158,6 @@ abstract class Scope implements QueueRunner {
 	// handled before their children (as they should), and observes are executed in the
 	// order of the source code.
 	prio: number = --lastPrio;
-
-	// ReverseSortedSet might add some symbols here
-	[idx: symbol]: Scope;
 
 	abstract onChange(index: any, newData: DatumType, oldData: DatumType): void;
 	abstract queueRun(): void;
@@ -570,8 +564,7 @@ class OnEachScope extends Scope {
 class OnEachItemScope extends ContentScope {
 	sortKey: string | number | undefined; // When undefined, this scope is currently not showing in the list
 	public parentElement: Element;
-
-	[idx: symbol]: OnEachItemScope;
+;
 
 	constructor(
 		public parent: OnEachScope,
